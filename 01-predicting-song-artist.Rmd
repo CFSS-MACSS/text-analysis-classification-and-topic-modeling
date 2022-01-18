@@ -1,0 +1,242 @@
+---
+title: "Predicting song artist from lyrics"
+output: html_document
+---
+
+# Load required packages
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(stringr)
+library(textrecipes)
+library(themis)
+library(vip)
+library(here)
+
+# set seed for randomization
+set.seed(123)
+theme_set(theme_minimal())
+```
+
+# Import data
+
+```{r}
+# get beyonce and taylor swift lyrics
+beyonce_lyrics <- read_csv(here("data", "beyonce_lyrics.csv"))
+taylor_swift_lyrics <- read_csv(here("data", "taylor_swift_lyrics.csv"))
+
+# clean lyrics for binding
+beyonce_clean <- beyonce_lyrics %>%
+  # convert to one row per song
+  group_by(song_id, song_name, artist_name) %>%
+  summarize(Lyrics = str_flatten(line, collapse = " ")) %>%
+  ungroup() %>%
+  # clean column names
+  select(artist = artist_name, song_title = song_name, lyrics = Lyrics)
+taylor_swift_clean <- taylor_swift_lyrics %>%
+  # clean column names
+  select(artist = Artist, song_title = Title, lyrics = Lyrics)
+
+# combine into single data file
+lyrics <- bind_rows(beyonce_clean, taylor_swift_clean) %>%
+  mutate(artist = factor(artist))
+lyrics
+```
+
+# Preprocess the dataset for modeling
+
+## Resampling folds
+
+- Split the data into training/test sets with 75% allocated for training
+- Split the training set into 10 cross-validation folds
+
+```{r rsample, dependson = "get-data"}
+# split into training/testing
+lyrics_split <- initial_split(data = ______, strata = ______, prop = ______)
+
+lyrics_train <- training(lyrics_split)
+lyrics_test <- testing(lyrics_split)
+
+# create cross-validation folds
+lyrics_folds <- vfold_cv(data = ______, strata = ______)
+```
+
+## Define the feature engineering recipe
+
+- Define a feature engineering recipe to predict the song's artist as a function of the lyrics
+- Tokenize the song lyrics
+- Remove stop words
+- Only keep the 500 most frequently appearing tokens
+- Calculate tf-idf scores for the remaining tokens
+    - This will generate one column for every token. Each column will have the standardized name `tfidf_lyrics_*` where `*` is the specific token. Instead we would prefer the column names simply be `*`. You can remove the `tfidf_lyrics_` prefix using
+    
+        ```r
+        # Simplify these names
+        step_rename_at(starts_with("tfidf_lyrics_"),
+          fn = ~ str_replace_all(
+            string = .,
+            pattern = "tfidf_lyrics_",
+            replacement = ""
+          )
+        )
+        ```
+        
+- [Downsample](/notes/supervised-text-classification/#concerns-regarding-multiclass-classification) the observations so there are an equal number of songs by Beyoncé and Taylor Swift in the analysis set
+
+```{r}
+# define preprocessing recipe
+lyrics_rec <- recipe(artist ~ lyrics, data = lyrics_train) %>%
+  ...
+lyrics_rec
+```
+
+# Estimate a random forest model
+
+- Define a random forest model grown with 1000 trees using the `ranger` engine.
+- Define a workflow using the feature engineering recipe and random forest model specification. Fit the workflow using the cross-validation folds.
+    - Use `control = control_resamples(save_pred = TRUE)` to save the assessment set predictions. We need these to assess the model's performance.
+    
+```{r}
+# define the model specification
+ranger_spec <- ______
+
+# define the workflow
+ranger_workflow <- workflow() %>%
+  add_recipe(lyrics_rec) %>%
+  add_model(ranger_spec)
+
+# fit the model to each of the cross-validation folds
+ranger_cv <- ranger_workflow %>%
+  ______
+```
+
+## Evaluate model performance
+
+- Calculate the model's accuracy and ROC AUC. How did it perform?
+- Draw the ROC curve for each validation fold
+- Generate the resampled confusion matrix for the model and draw it using a heatmap. How does the model perform predicting Beyoncé songs relative to Taylor Swift songs?
+
+```{r}
+# extract metrics and predictions
+ranger_cv_metrics <- ______(ranger_cv)
+ranger_cv_predictions <- ______(ranger_cv)
+
+# how well did the model perform?
+ranger_cv_metrics
+
+# roc curve
+ranger_cv_predictions %>%
+  group_by(id) %>%
+  ...
+
+# confusion matrix
+conf_mat_resampled(x = ______, tidy = ______) %>%
+  autoplot(type = "heatmap")
+```
+
+# Penalized regression
+
+## Define the feature engineering recipe
+
+Define the same feature engineering recipe as before, with two adjustments:
+
+1. Calculate all possible 1-grams, 2-grams, 3-grams, 4-grams, and 5-grams
+1. Retain the 2000 most frequently occurring tokens.
+
+```{r}
+# redefine recipe to include multiple n-grams
+glmnet_rec <- recipe(artist ~ lyrics, data = lyrics_train) %>%
+  ...
+glmnet_rec
+```
+
+## Tune the penalized regression model
+
+- Define the penalized regression model specification, including tuning placeholders for `penalty` and `mixture`
+- Create the workflow object
+- Define a tuning grid with every combination of:
+    - `penalty = 10^seq(-6, -1, length.out = 20)`
+    - `mixture = c(0, 0.2, 0.4, 0.6, 0.8, 1)`
+- Tune the model using the cross-validation folds
+- Evaluate the tuning procedure and identify the best performing models based on ROC AUC
+
+```{r}
+# define the penalized regression model specification
+glmnet_spec <- ______
+
+# define the new workflow
+glmnet_workflow <- workflow() %>%
+  add_recipe(glmnet_rec) %>%
+  add_model(glmnet_spec)
+
+# create the tuning grid
+glmnet_grid <- tidyr::crossing(
+  penalty = 10^seq(-6, -1, length.out = 20),
+  mixture = c(0, 0.2, 0.4, 0.6, 0.8, 1)
+)
+
+# tune over the model hyperparameters
+glmnet_tune <- ______
+```
+
+```{r}
+# evaluate results
+collect_metrics(x = glmnet_tune)
+autoplot(glmnet_tune)
+
+# identify the five best hyperparameter combinations
+show_best(x = glmnet_tune, metric = "roc_auc")
+```
+
+## Fit the best model
+
+- Select the hyperparameter combinations that achieve the highest ROC AUC
+- Fit the penalized regression model using the best hyperparameters and the full training set. How well does the model perform on the test set?
+
+```{r}
+# select the best model's hyperparameters
+glmnet_best <- select_best(glmnet_tune, metric = "roc_auc")
+
+# fit a single model using the selected hyperparameters and the full training set
+glmnet_final <- glmnet_workflow %>%
+  finalize_workflow(parameters = glmnet_best) %>%
+  last_fit(split = lyrics_split)
+collect_metrics(glmnet_final)
+```
+
+## Variable importance
+
+```{r}
+# extract parnsip model fit
+glmnet_imp <- extract_fit_parsnip(glmnet_final) %>%
+  # calculate variable importance for the specific penalty parameter used
+  vi(lambda = glmnet_best$penalty)
+
+# clean up the data frame for visualization
+glmnet_imp %>%
+  mutate(
+    Sign = case_when(
+      Sign == "POS" ~ "More likely from Beyoncé",
+      Sign == "NEG" ~ "More likely from Taylor Swift"
+    ),
+    Importance = abs(Importance)
+  ) %>%
+  group_by(Sign) %>%
+  # extract 20 most important n-grams for each artist
+  slice_max(order_by = Importance, n = 20) %>%
+  ggplot(mapping = aes(
+    x = Importance,
+    y = fct_reorder(Variable, Importance),
+    fill = Sign
+  )) +
+  geom_col(show.legend = FALSE) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_fill_brewer(type = "qual") +
+  facet_wrap(facets = vars(Sign), scales = "free") +
+  labs(
+    y = NULL,
+    title = "Variable importance for predicting the song artist",
+    subtitle = "These features are the most important in predicting\nwhether a song is by Beyoncé or Taylor Swift"
+  )
+```
