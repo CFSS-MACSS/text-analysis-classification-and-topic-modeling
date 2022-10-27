@@ -1,6 +1,6 @@
 ---
 title: "Predicting song artist from lyrics"
-output: html_document
+format: html
 ---
 
 # Load required packages
