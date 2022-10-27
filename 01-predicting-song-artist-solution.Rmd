@@ -25,6 +25,7 @@ theme_set(theme_minimal())
 # get beyonce and taylor swift lyrics
 beyonce_lyrics <- read_csv(here("data", "beyonce_lyrics.csv"))
 taylor_swift_lyrics <- read_csv(here("data", "taylor_swift_lyrics.csv"))
+extra_lyrics <- read_csv(here("data", "updated-album-lyrics.csv"))  # albums released since 2020
 
 # clean lyrics for binding
 beyonce_clean <- beyonce_lyrics %>%
@@ -34,7 +35,10 @@ beyonce_clean <- beyonce_lyrics %>%
   ungroup() %>%
   # clean column names
   select(artist = artist_name, song_title = song_name, lyrics = Lyrics)
-taylor_swift_clean <- taylor_swift_lyrics %>%
+taylor_swift_clean <- bind_rows(
+  taylor_swift_lyrics,
+  extra_lyrics
+) %>%
   # clean column names
   select(artist = Artist, song_title = Title, lyrics = Lyrics)
 
