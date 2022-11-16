@@ -28,23 +28,24 @@ taylor_swift_lyrics <- read_csv(here("data", "taylor_swift_lyrics.csv"))
 extra_lyrics <- read_csv(here("data", "updated-album-lyrics.csv"))  # albums released since 2020
 
 # clean lyrics for binding
-beyonce_clean <- beyonce_lyrics %>%
+beyonce_clean <- bind_rows(
+  beyonce_lyrics,
+  extra_lyrics
+  ) %>%
   # convert to one row per song
   group_by(song_id, song_name, artist_name) %>%
   summarize(Lyrics = str_flatten(line, collapse = " ")) %>%
   ungroup() %>%
   # clean column names
   select(artist = artist_name, song_title = song_name, lyrics = Lyrics)
-taylor_swift_clean <- bind_rows(
-  taylor_swift_lyrics,
-  extra_lyrics
-) %>%
+taylor_swift_clean <- taylor_swift_lyrics %>%
   # clean column names
   select(artist = Artist, song_title = Title, lyrics = Lyrics)
 
 # combine into single data file
 lyrics <- bind_rows(beyonce_clean, taylor_swift_clean) %>%
-  mutate(artist = factor(artist))
+  mutate(artist = factor(artist)) %>%
+  drop_na()
 lyrics
 ```
 
@@ -129,7 +130,7 @@ ranger_workflow <- workflow() %>%
 ranger_cv <- ranger_workflow %>%
   fit_resamples(
     resamples = lyrics_folds,
-    control = control_resamples(save_pred = TRUE)
+    control = control_resamples(save_pred = TRUE, verbose = TRUE)
   )
 ```
 
@@ -214,7 +215,8 @@ glmnet_grid <- tidyr::crossing(
 glmnet_tune <- tune_grid(
   object = glmnet_workflow,
   resamples = lyrics_folds,
-  grid = glmnet_grid
+  grid = glmnet_grid,
+  control = control_grid(verbose = TRUE)
 )
 ```
 
